@@ -10,6 +10,8 @@ import threading
 import time
 import warnings
 
+from G722 import G722
+import numpy as np
 
 __all__ = [
     "add_bytes",
@@ -127,7 +129,7 @@ class PayloadType(Enum):
     DVI4_16000 = 6, 16000, 1, "DVI4"
     LPC = 7, 8000, 1, "LPC"
     PCMA = 8, 8000, 1, "PCMA"
-    G722 = 9, 8000, 1, "G722"
+    G722 = 9, 16000, 1, "G722"
     L16_2 = 10, 44100, 2, "L16"
     L16 = 11, 44100, 1, "L16"
     QCELP = 12, 8000, 1, "QCELP"
@@ -166,14 +168,14 @@ class RTPPacketManager:
         self.log = {}
         self.rebuilding = False
 
-    def read(self, length: int = 160) -> bytes:
+    def read(self, length: int = 160, padding = b"\x80") -> bytes:
         # This acts functionally as a lock while the buffer is being rebuilt.
         while self.rebuilding:
             time.sleep(0.01)
         with self.bufferLock:
             packet = self.buffer.read(length)
             if len(packet) < length:
-                packet = packet + (b"\x80" * (length - len(packet)))
+                packet = packet + (padding * (length - len(packet)))
         return packet
 
     def rebuild(self, reset: bool, offset: int = 0, data: bytes = b"") -> None:
@@ -304,6 +306,7 @@ class RTPClient:
         self.NSD = True
         # Example: {0: PayloadType.PCMU, 101: PayloadType.EVENT}
         self.assoc = assoc
+        self.g722 = G722(16000, 64000)
         debug("Selecting audio codec for transmission")
         for m in assoc:
             try:
@@ -354,11 +357,11 @@ class RTPClient:
         self.sin.close()
         self.sout.close()
 
-    def read(self, length: int = 160, blocking: bool = True) -> bytes:
+    def read(self, length: int = 160, blocking: bool = True, padding = b"\x80") -> bytes:
         if not blocking:
             return self.pmin.read(length)
         packet = self.pmin.read(length)
-        while packet == (b"\x80" * length) and self.NSD:
+        while packet == (padding * length) and self.NSD:
             time.sleep(0.01)
             packet = self.pmin.read(length)
         return packet
@@ -382,7 +385,7 @@ class RTPClient:
     def trans(self) -> None:
         while self.NSD:
             last_sent = time.monotonic_ns()
-            payload = self.pmout.read()
+            payload = self.pmout.read(length=640, padding = b"\x00")
             payload = self.encode_packet(payload)
             packet = b"\x80"  # RFC 1889 V2 No Padding Extension or CC.
             packet += chr(int(self.preference)).encode("utf8")
@@ -412,7 +415,7 @@ class RTPClient:
             self.outTimestamp += len(payload)
             # Calculate how long it took to generate this packet.
             # Then how long we should wait to send the next, then devide by 2.
-            delay = (1 / self.preference.rate) * 160
+            delay = (1 / self.preference.rate) * 320
             sleep_time = max(
                 0, delay - ((time.monotonic_ns() - last_sent) / 1000000000)
             )
@@ -459,6 +462,8 @@ class RTPClient:
             return self.encode_pcmu(payload)
         elif self.preference == PayloadType.PCMA:
             return self.encode_pcmu(payload)
+        elif self.preference == PayloadType.G722:
+            return self.encode_g722(payload)
         else:
             raise RTPParseError(
                 "Unsupported codec (encode): " + str(self.preference)
@@ -490,6 +495,12 @@ class RTPClient:
     def encode_pcmu(self, packet: bytes) -> bytes:
         packet = audioop.bias(packet, 1, -128)
         packet = audioop.lin2ulaw(packet, 1)
+        return packet
+
+    def encode_g722(self, packet: bytes) -> bytes:
+        # packet = audioop.bias(packet, 2, -32768)
+        # packet = audioop.lin2ulaw(packet, 1)
+        packet = self.g722.encode(np.frombuffer(packet, dtype=np.int16))
         return packet
 
     def parsePCMA(self, packet: RTPMessage) -> None:

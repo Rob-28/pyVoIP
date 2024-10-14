@@ -34,4 +34,4 @@ SIPCompatibleMethods = ["INVITE", "ACK", "BYE", "CANCEL", "OPTIONS"]
 SIPCompatibleVersions = ["SIP/2.0"]
 
 RTPCompatibleVersions = [2]
-RTPCompatibleCodecs = [PayloadType.PCMU, PayloadType.PCMA, PayloadType.EVENT]
+RTPCompatibleCodecs = [PayloadType.G722, PayloadType.PCMU, PayloadType.PCMA, PayloadType.EVENT]
