@@ -188,7 +188,7 @@ class RTPPacketManager:
             bufferloc = self.buffer.tell()
             self.buffer = io.BytesIO()
             for pkt in self.log:
-                self.write(pkt, self.log[pkt])
+                self.write(pktrebuild, self.log[pkt])
             self.buffer.seek(bufferloc, 0)
         self.rebuilding = False
 
@@ -306,7 +306,8 @@ class RTPClient:
         self.NSD = True
         # Example: {0: PayloadType.PCMU, 101: PayloadType.EVENT}
         self.assoc = assoc
-        self.g722 = G722(16000, 64000)
+        self.g722_decoder = G722(16000, 64000)
+        self.g722_encoder = G722(16000, 64000)
         debug("Selecting audio codec for transmission")
         for m in assoc:
             try:
@@ -337,6 +338,8 @@ class RTPClient:
         self.outTimestamp = random.randint(1, 10000)
         self.outSSRC = random.randint(1000, 65530)
 
+        self.payload_type = None
+
     def start(self) -> None:
         self.sin = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         # Some systems just reply to the port they receive from instead of
@@ -359,11 +362,12 @@ class RTPClient:
 
     def read(self, length: int = 160, blocking: bool = True, padding = b"\x80") -> bytes:
         if not blocking:
-            return self.pmin.read(length)
-        packet = self.pmin.read(length)
+            return self.parse_packet(self.pmin.read(length, padding))
+        packet = self.pmin.read(length, padding)
         while packet == (padding * length) and self.NSD:
             time.sleep(0.01)
-            packet = self.pmin.read(length)
+            packet = self.pmin.read(length, padding)
+        packet = self.parse_packet(packet)
         return packet
 
     def write(self, data: bytes) -> None:
@@ -374,7 +378,9 @@ class RTPClient:
         while self.NSD:
             try:
                 packet = self.sin.recv(8192)
-                self.parse_packet(packet)
+                message = RTPMessage(packet, self.assoc)
+                self.payload_type = message.payload_type
+                self.pmin.write(message.timestamp, message.payload)
             except BlockingIOError:
                 time.sleep(0.01)
             except RTPParseError as e:
@@ -426,26 +432,18 @@ class RTPClient:
         reduction = pyVoIP.TRANSMIT_DELAY_REDUCTION + 1
         return reduction if reduction else 1.0
 
-    def parsePacket(self, packet: bytes) -> None:
-        warnings.warn(
-            "parsePacket is deprecated due to PEP8 compliance. "
-            + "Use parse_packet instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.parse_packet(packet)
-
-    def parse_packet(self, packet: bytes) -> None:
-        msg = RTPMessage(packet, self.assoc)
-        if msg.payload_type == PayloadType.PCMU:
-            self.parse_pcmu(msg)
-        elif msg.payload_type == PayloadType.PCMA:
-            self.parse_pcma(msg)
-        elif msg.payload_type == PayloadType.EVENT:
-            self.parse_telephone_event(msg)
+    def parse_packet(self, msg: bytes) -> bytes:
+        if self.payload_type == PayloadType.PCMU:
+            return self.parse_pcmu(msg)
+        elif self.payload_type == PayloadType.PCMA:
+            return self.parse_pcma(msg)
+        elif self.payload_type == PayloadType.G722:
+            return self.parse_g722(msg)
+        elif self.payload_type == PayloadType.EVENT:
+            return self.parse_telephone_event(msg)
         else:
             raise RTPParseError(
-                "Unsupported codec (parse): " + str(msg.payload_type)
+                "Unsupported codec (parse): " + str(self.payload_type)
             )
 
     def encodePacket(self, payload: bytes) -> bytes:
@@ -469,67 +467,35 @@ class RTPClient:
                 "Unsupported codec (encode): " + str(self.preference)
             )
 
-    def parsePCMU(self, packet: RTPMessage) -> None:
-        warnings.warn(
-            "parsePCMU is deprecated due to PEP8 compliance. "
-            + "Use parse_pcmu instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.parse_pcmu(packet)
 
-    def parse_pcmu(self, packet: RTPMessage) -> None:
-        data = audioop.ulaw2lin(packet.payload, 1)
+    def parse_pcmu(self, packet: bytes) -> bytes:
+        data = audioop.ulaw2lin(packet, 1)
         data = audioop.bias(data, 1, 128)
-        self.pmin.write(packet.timestamp, data)
+        return data
 
-    def encodePCMU(self, packet: bytes) -> bytes:
-        warnings.warn(
-            "encodePCMU is deprecated due to PEP8 compliance. "
-            + "Use encode_pcmu instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.encode_pcmu(packet)
+    def parse_pcma(self, packet: bytes) -> bytes:
+        data = audioop.alaw2lin(packet, 1)
+        data = audioop.bias(data, 1, 128)
+        return data
+
+    def parse_g722(self, packet: bytes) -> bytes:
+        return self.g722_decoder.decode(bytes(packet)).tobytes()
+
 
     def encode_pcmu(self, packet: bytes) -> bytes:
         packet = audioop.bias(packet, 1, -128)
         packet = audioop.lin2ulaw(packet, 1)
         return packet
 
-    def encode_g722(self, packet: bytes) -> bytes:
-        # packet = audioop.bias(packet, 2, -32768)
-        # packet = audioop.lin2ulaw(packet, 1)
-        packet = self.g722.encode(np.frombuffer(packet, dtype=np.int16))
-        return packet
-
-    def parsePCMA(self, packet: RTPMessage) -> None:
-        warnings.warn(
-            "parsePCMA is deprecated due to PEP8 compliance. "
-            + "Use parse_pcma instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.parse_pcma(packet)
-
-    def parse_pcma(self, packet: RTPMessage) -> None:
-        data = audioop.alaw2lin(packet.payload, 1)
-        data = audioop.bias(data, 1, 128)
-        self.pmin.write(packet.timestamp, data)
-
-    def encodePCMA(self, packet: bytes) -> bytes:
-        warnings.warn(
-            "encodePCMA is deprecated due to PEP8 compliance. "
-            + "Use encode_pcma instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.encode_pcma(packet)
-
     def encode_pcma(self, packet: bytes) -> bytes:
         packet = audioop.bias(packet, 1, -128)
         packet = audioop.lin2alaw(packet, 1)
         return packet
+
+    def encode_g722(self, packet: bytes) -> bytes:
+        packet = self.g722_encoder.encode(np.frombuffer(packet, dtype=np.int16))
+        return packet
+
 
     def parseTelephoneEvent(self, packet: RTPMessage) -> None:
         warnings.warn(

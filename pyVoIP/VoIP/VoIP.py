@@ -445,27 +445,17 @@ class VoIPCall:
         for x in self.RTPClients:
             x.write(data)
 
-    def readAudio(self, length=160, blocking=True) -> bytes:
-        warnings.warn(
-            "readAudio is deprecated due to PEP8 compliance. "
-            + "Use read_audio instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.read_audio(length, blocking)
-
-    def read_audio(self, length=160, blocking=True) -> bytes:
+    def read_audio(self, length=160, blocking=True, padding = None) -> bytes:
         if len(self.RTPClients) == 1:
-            return self.RTPClients[0].read(length, blocking)
+            return self.RTPClients[0].read(length, blocking, padding)
         data = []
         for x in self.RTPClients:
-            data.append(x.read(length))
+            data.append(x.read(length, blocking, padding))
         # Mix audio from different sources before returning
         nd = audioop.add(data.pop(0), data.pop(0), 1)
         for d in data:
             nd = audioop.add(nd, d, 1)
         return nd
-
 
 class VoIPPhone:
     def __init__(
