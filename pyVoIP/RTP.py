@@ -391,7 +391,8 @@ class RTPClient:
     def trans(self) -> None:
         while self.NSD:
             last_sent = time.monotonic_ns()
-            payload = self.pmout.read(length=640, padding = b"\x00")
+            payload_length = self.preference.rate // 25 # 40 ms packets
+            payload = self.pmout.read(length=payload_length, padding = b"\x00")
             payload = self.encode_packet(payload)
             packet = b"\x80"  # RFC 1889 V2 No Padding Extension or CC.
             packet += chr(int(self.preference)).encode("utf8")
@@ -421,7 +422,7 @@ class RTPClient:
             self.outTimestamp += len(payload)
             # Calculate how long it took to generate this packet.
             # Then how long we should wait to send the next, then devide by 2.
-            delay = (1 / self.preference.rate) * 320
+            delay = payload_length / self.preference.rate / 2
             sleep_time = max(
                 0, delay - ((time.monotonic_ns() - last_sent) / 1000000000)
             )
