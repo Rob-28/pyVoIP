@@ -379,6 +379,10 @@ class RTPClient:
             try:
                 packet = self.sin.recv(8192)
                 message = RTPMessage(packet, self.assoc)
+                if message.payload_type == PayloadType.EVENT:
+                    self.parse_telephone_event(message)
+                    continue
+
                 self.payload_type = message.payload_type
                 self.pmin.write(message.timestamp, message.payload)
             except BlockingIOError:
@@ -440,8 +444,6 @@ class RTPClient:
             return self.parse_pcma(msg)
         elif self.payload_type == PayloadType.G722:
             return self.parse_g722(msg)
-        elif self.payload_type == PayloadType.EVENT:
-            return self.parse_telephone_event(msg)
         else:
             raise RTPParseError(
                 "Unsupported codec (parse): " + str(self.payload_type)
