@@ -188,7 +188,7 @@ class RTPPacketManager:
             bufferloc = self.buffer.tell()
             self.buffer = io.BytesIO()
             for pkt in self.log:
-                self.write(pktrebuild, self.log[pkt])
+                self.write(pkt, self.log[pkt])
             self.buffer.seek(bufferloc, 0)
         self.rebuilding = False
 
@@ -393,8 +393,8 @@ class RTPClient:
                 pass
 
     def trans(self) -> None:
+        last_sent = time.time()
         while self.NSD:
-            last_sent = time.monotonic_ns()
             payload_length = self.preference.rate // 25 # 40 ms packets
             payload = self.pmout.read(length=payload_length, padding = b"\x00")
             payload = self.encode_packet(payload)
@@ -428,9 +428,10 @@ class RTPClient:
             # Then how long we should wait to send the next, then devide by 2.
             delay = payload_length / self.preference.rate / 2
             sleep_time = max(
-                0, delay - ((time.monotonic_ns() - last_sent) / 1000000000)
+                0, delay - (time.time() - last_sent)
             )
             time.sleep(sleep_time / self.trans_delay_reduction)
+            last_sent += delay
 
     @property
     def trans_delay_reduction(self) -> float:
